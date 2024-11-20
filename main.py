@@ -8,7 +8,10 @@ from sklearn.model_selection import train_test_split
 import os
 import json
 from s3fs.core import S3FileSystem
+import boto3
+from botocore.exceptions import NoCredentialsError
 import pickle
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Time Series Forecasting with LSTNet/ARIMA')
@@ -45,6 +48,15 @@ def parse_args():
     args = parser.parse_args()
     args.cuda = args.gpu >= 0 and torch.cuda.is_available()
     return args
+
+def load_s3(s3_path,arr):
+    s3 = S3FileSystem()
+    with s3.open(s3_path, 'wb') as f:
+        f.write(pickle.dumps(arr))
+
+def get_s3(s3_path):
+    s3 = S3FileSystem()
+    return np.load(s3.open(s3_path), allow_pickle=True)
 
 def train_lstnet(model, X_train, y_train, X_val, y_val, args, device):
     criterion = torch.nn.MSELoss()
