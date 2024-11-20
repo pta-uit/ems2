@@ -1,0 +1,15 @@
+name: model_training
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - pytorch
+  - numpy
+  - pandas
+  - scikit-learn
+  - statsmodels
+  - matplotlib
+  - mlflow
+  - pip:
+    - s3fs
+    - boto3

@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: solar-prediction-api
+  namespace: prediction
+spec:
+  replicas: 1  # Number of replicas (pods) for high availability
+  selector:
+    matchLabels:
+      app: solar-prediction-api
+  template:
+    metadata:
+      labels:
+        app: solar-prediction-api
+    spec:
+      containers:
+        - name: solar-app
+          image: 625715126488.dkr.ecr.ap-southeast-1.amazonaws.com/api:latest
+          ports:
+            - containerPort: 5000
+          volumeMounts:
+            - name: aws-credentials-vl
+              mountPath: /root/.aws/credentials
+              subPath: credentials
+              readOnly: true
+          args:
+          - --predictions
+          - s3://trambk/solar-energy/model/predictions.csv
+      volumes:
+        - name: aws-credentials-vl
+          secret:
+            secretName: aws-secret
+      imagePullSecrets:
+        - name: ecr-secret
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: solar-prediction-api-service
+  namespace: prediction
+spec:
+  selector:
+    app: solar-prediction-api
+  ports:
+    - protocol: TCP
+      port: 5000
+      targetPort: 5000
+  type: ClusterIP 

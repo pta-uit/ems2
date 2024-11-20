@@ -1,0 +1,4 @@
+Flask
+pandas
+s3fs
+boto3

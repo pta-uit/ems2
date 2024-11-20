@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: solar-streamlit
+  namespace: prediction
+spec:
+  replicas: 1  # Number of replicas (pods) for high availability
+  selector:
+    matchLabels:
+      app: solar-streamlit
+  template:
+    metadata:
+      labels:
+        app: solar-streamlit
+    spec:
+      containers:
+        - name: solar-streamlit
+          image: 625715126488.dkr.ecr.ap-southeast-1.amazonaws.com/solar-app:latest
+          ports:
+            - containerPort: 8501
+          volumeMounts:
+            - name: aws-credentials-vl
+              mountPath: /root/.aws/credentials
+              subPath: credentials
+              readOnly: true
+      volumes:
+        - name: aws-credentials-vl
+          secret:
+            secretName: aws-secret
+      imagePullSecrets:
+        - name: ecr-secret
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: solar-streamlit-service
+  namespace: prediction
+spec:
+  selector:
+    app: solar-streamlit
+  ports:
+    - protocol: TCP
+      port: 8501
+      targetPort: 8501
+  type: ClusterIP 

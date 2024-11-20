@@ -1,0 +1,9 @@
+torch
+numpy
+pandas
+scikit-learn
+statsmodels
+matplotlib
+s3fs
+boto3
+mlflow
