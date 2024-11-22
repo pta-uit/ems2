@@ -106,11 +106,11 @@ def train_arima(model, X_train, y_train, X_val, y_val, args):
     model.fit(X_train, y_train)
     
     # Calculate training error
-    train_pred = np.array([model.predict(None) for _ in range(len(y_train))])
+    train_pred = model.predict(X_train)
     train_loss = np.mean((train_pred - y_train) ** 2)
     
     # Calculate validation error
-    val_pred = np.array([model.predict(None) for _ in range(len(y_val))])
+    val_pred = model.predict(X_val)
     val_loss = np.mean((val_pred - y_val) ** 2)
     
     print(f'Training MSE: {train_loss:.4f}, Validation MSE: {val_loss:.4f}')

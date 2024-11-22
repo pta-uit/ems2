@@ -8,15 +8,15 @@ warnings.filterwarnings('ignore')
 class ArimaModel:
     def __init__(self, args):
         """
-        Initialize ARIMA model with default orders (2,1,2)
+        Initialize ARIMA model with optimized parameters for solar generation
         Args:
             args: arguments containing ARIMA parameters
         """
-        self.order = (
-            getattr(args, 'ar_order', 2),  # default p=2
-            getattr(args, 'diff_order', 1), # default d=1
-            getattr(args, 'ma_order', 2)    # default q=2
-        )
+        # Optimized parameters for solar generation:
+        # p=24 to capture daily patterns
+        # d=1 for first-order differencing to achieve stationarity
+        # q=1 for simple moving average component
+        self.order = (24, 1, 1)
         self.horizon = args.horizon
         self.models = None
         
@@ -28,12 +28,13 @@ class ArimaModel:
         Returns:
             reshaped_data: numpy array of shape (n_samples, n_features)
         """
-        # We'll use only the last value from each window
+        if data is None:
+            raise ValueError("Input data cannot be None")
         return data[:, -1, :]
     
     def fit(self, X, y):
         """
-        Fit ARIMA model for each target variable
+        Fit ARIMA model for solar generation forecasting
         Args:
             X: input data of shape (n_samples, window_size, n_features)
             y: target values of shape (n_samples, horizon)
@@ -44,18 +45,19 @@ class ArimaModel:
         train_data = self.reshape_data(X)
         
         self.models = []
-        # Fit separate ARIMA model for each horizon step of the target variable
-        for i in range(self.horizon):  # Changed from y.shape[1] to self.horizon
-            # Use the first feature column for training (assuming it's the most relevant)
-            # You might want to modify this based on which feature is most important for prediction
-            model = ARIMA(train_data[:, 0], order=self.order)  # Using only the first feature
+        # Use the target variable (solar generation) for training
+        target_data = y
+        
+        # Fit separate ARIMA model for each horizon step
+        for i in range(self.horizon):
+            model = ARIMA(target_data[:, i], order=self.order)
             fitted_model = model.fit()
             self.models.append(fitted_model)
             print(f"Fitted model for horizon step {i+1}")
             
     def predict(self, X):
         """
-        Generate predictions
+        Generate predictions for solar generation
         Args:
             X: input data of shape (n_samples, window_size, n_features)
         Returns:
@@ -63,15 +65,12 @@ class ArimaModel:
         """
         if self.models is None:
             raise ValueError("Model needs to be fitted before making predictions")
-            
-        # Reshape input data
-        test_data = self.reshape_data(X)
         
-        predictions = np.zeros((len(test_data), self.horizon))
+        predictions = np.zeros((X.shape[0], self.horizon))
         
-        # Generate predictions for each horizon step using the first feature
+        # Generate predictions for each horizon step
         for i, model in enumerate(self.models):
-            forecast = model.forecast(steps=1)
+            forecast = model.forecast(steps=X.shape[0])
             predictions[:, i] = forecast
             
         return predictions
@@ -86,6 +85,8 @@ class ArimaModel:
             mse: Mean squared error
         """
         predictions = self.predict(X)
+        # Ensure predictions are non-negative (since solar generation can't be negative)
+        predictions = np.maximum(predictions, 0)
         mse = mean_squared_error(y, predictions)
         return mse
     
