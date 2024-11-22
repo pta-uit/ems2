@@ -50,6 +50,23 @@ def load_s3(s3_path,arr):
 def get_s3(s3_path):
     s3 = S3FileSystem()
     return np.load(s3.open(s3_path), allow_pickle=True)
+
+def save_model(model, save_path, args, features):
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    
+    # Save model state dict
+    torch.save(model.state_dict(), save_path, _use_new_zipfile_serialization=True)
+    
+    # Save metadata separately
+    metadata = {
+        'args': vars(args),
+        'features': features
+    }
+    metadata_path = save_path.replace('.pt', '_metadata.pt')
+    torch.save(metadata, metadata_path, _use_new_zipfile_serialization=True)
+
+    print(f'Model saved to {save_path}')
+    print(f'Metadata saved to {metadata_path}')
     
 def get_model(args, data):
     if args.model == 'lstnet':
