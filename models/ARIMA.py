@@ -44,9 +44,11 @@ class ArimaModel:
         train_data = self.reshape_data(X)
         
         self.models = []
-        # Fit separate ARIMA model for each horizon step
-        for i in range(y.shape[1]):
-            model = ARIMA(train_data[:, i], order=self.order)
+        # Fit separate ARIMA model for each horizon step of the target variable
+        for i in range(self.horizon):  # Changed from y.shape[1] to self.horizon
+            # Use the first feature column for training (assuming it's the most relevant)
+            # You might want to modify this based on which feature is most important for prediction
+            model = ARIMA(train_data[:, 0], order=self.order)  # Using only the first feature
             fitted_model = model.fit()
             self.models.append(fitted_model)
             print(f"Fitted model for horizon step {i+1}")
@@ -65,9 +67,9 @@ class ArimaModel:
         # Reshape input data
         test_data = self.reshape_data(X)
         
-        predictions = np.zeros((len(test_data), len(self.models)))
+        predictions = np.zeros((len(test_data), self.horizon))
         
-        # Generate predictions for each horizon step
+        # Generate predictions for each horizon step using the first feature
         for i, model in enumerate(self.models):
             forecast = model.forecast(steps=1)
             predictions[:, i] = forecast
