@@ -3,16 +3,22 @@ import torch
 import numpy as np
 import pandas as pd
 from s3fs.core import S3FileSystem
-from models.LSTNet import Model
+from models.LSTNet import Model as LSTNet
+from models.attention_lstm import AttentionLSTM
+import os
 from sklearn.preprocessing import MinMaxScaler
 import pickle
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Make predictions using LSTNet model')
-    parser.add_argument('--model_path', type=str, required=True, help='S3 path to the model file')
+    parser = argparse.ArgumentParser(description='Make predictions using deep learning models')
+    parser.add_argument('--model_path', type=str, required=True, help='S3 path to the model directory')
+    parser.add_argument('--model', type=str, required=True, choices=['lstnet', 'attention'], 
+                       help='Model type to use for prediction')
     parser.add_argument('--input_data', type=str, required=True, help='S3 path to the prepared input data pickle file')
-    parser.add_argument('--output', type=str, required=True, help='S3 path to save the predictions')
-    parser.add_argument('--strategy', type=str, default='weighted_average', choices=['single', 'average', 'most_recent', 'weighted_average'], help='Strategy for processing predictions')
+    parser.add_argument('--output', type=str, required=True, help='S3 path to save predictions directory')
+    parser.add_argument('--strategy', type=str, default='weighted_average', 
+                       choices=['single', 'average', 'most_recent', 'weighted_average'], 
+                       help='Strategy for processing predictions')
     parser.add_argument('--lambda_param', type=float, default=0.1, help='Lambda parameter for weighted average strategy')
     return parser.parse_args()
 
@@ -26,16 +32,44 @@ def save_to_s3(data, s3_path):
     with s3.open(s3_path, 'w') as f:
         data.to_csv(f, index=False)
 
-def load_model_from_s3(s3_path):
-    try:
-        state_dict = load_from_s3(s3_path)
-        metadata_path = s3_path.replace('.pt', '_metadata.pt')
-        metadata = load_from_s3(metadata_path)
+def get_model_paths(base_path, model_type):
+    """Get model and metadata paths based on model type."""
+    model_filename = f"{model_type}_model.pt"
+    metadata_filename = f"{model_type}_model_metadata.pt"
+    
+    model_path = os.path.join(base_path, model_filename)
+    metadata_path = os.path.join(base_path, metadata_filename)
+    
+    return model_path, metadata_path
 
-        args = argparse.Namespace(**metadata['args'])
+def get_model_class(model_type):
+    """Get the appropriate model class based on model type."""
+    if model_type == 'lstnet':
+        return LSTNet
+    elif model_type == 'attention':
+        return AttentionLSTM
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
+def load_model_from_s3(model_path, metadata_path, model_type):
+    try:
+        state_dict = load_from_s3(model_path)
+        metadata = load_from_s3(metadata_path)
+        
+        # Add missing attributes required by both models
+        args_dict = metadata['args']
+        if 'cuda' not in args_dict:
+            args_dict['cuda'] = False
+        
+        # Create Namespace with the arguments
+        args = argparse.Namespace(**args_dict)
+        
+        # Create data object with number of features
         data = type('Data', (), {'m': len(metadata['features'])})()
         
-        model = Model(args, data)
+        # Get appropriate model class and initialize
+        ModelClass = get_model_class(model_type)
+        model = ModelClass(args, data)
         model.load_state_dict(state_dict)
         model.eval()
         
@@ -69,7 +103,8 @@ def preprocess_input(data, model_features, input_features, window_size, highway_
     else:
         input_sequence = data_scaled
     
-    h = min(h, window_size - highway_window)
+    if highway_window is not None:  # Only for LSTNet
+        h = min(h, window_size - highway_window)
     
     return torch.FloatTensor(input_sequence), h
 
@@ -117,9 +152,9 @@ def process_predictions(predictions, timestamps, h, strategy='weighted_average',
 def inverse_transform_predictions(predictions_df, scaler, features, target_feature):
     target_index = features.index(target_feature)
     dummy = np.zeros((len(predictions_df), scaler.n_features_in_))
-    dummy[:, 0] = predictions_df['prediction'].values
+    dummy[:, target_index] = predictions_df['prediction'].values
     unscaled = scaler.inverse_transform(dummy)
-    unscaled_predictions = unscaled[:, 0]
+    unscaled_predictions = unscaled[:, target_index]
     
     return pd.DataFrame({
         'timestamp': predictions_df['pred_timestamp'],
@@ -130,37 +165,52 @@ def main():
     args = parse_args()
     
     try:
-        model, metadata = load_model_from_s3(args.model_path)
+        # Get model and metadata paths
+        model_path, metadata_path = get_model_paths(args.model_path, args.model)
+        
+        # Load model and metadata
+        model, metadata = load_model_from_s3(model_path, metadata_path, args.model)
         if model is None or metadata is None:
             raise ValueError("Failed to load model or metadata")
         
+        # Load input data
         input_data = load_from_s3(args.input_data)
         
+        # Get model parameters
         model_features = metadata['features']
         window_size = metadata['args']['window']
-        highway_window = metadata['args']['highway_window']
+        highway_window = metadata['args'].get('highway_window')  # Only for LSTNet
         horizon = metadata['args']['horizon']
         h = input_data['h']
         
+        # Prepare input data
         scaler = create_scaler(input_data['X'])
         input_sequence, h = preprocess_input(input_data['X'], model_features, input_data['features'], 
-                                             window_size, highway_window, scaler, h)
+                                           window_size, highway_window, scaler, h)
         
+        # Make predictions
         raw_predictions = make_predictions(model, input_sequence, h, horizon)
-
+        
+        # Process timestamps
         start_datetime = pd.to_datetime(input_data['start_datetime'])
         prediction_timestamps = [start_datetime + pd.Timedelta(hours=i) for i in range(len(input_sequence))]
         
-        processed_predictions = process_predictions(raw_predictions, prediction_timestamps, h, args.strategy, args.lambda_param)
+        # Process predictions
+        processed_predictions = process_predictions(raw_predictions, prediction_timestamps, h, 
+                                                 args.strategy, args.lambda_param)
         
         if processed_predictions is None:
             raise ValueError("Failed to process predictions")
         
+        # Transform predictions back to original scale
         target_feature = input_data['target']
-        final_predictions = inverse_transform_predictions(processed_predictions, scaler, input_data['features'], target_feature)
+        final_predictions = inverse_transform_predictions(processed_predictions, scaler, 
+                                                       input_data['features'], target_feature)
         
-        save_to_s3(final_predictions, args.output)
-        print(f"Predictions saved to {args.output}")
+        # Save predictions
+        output_path = os.path.join(args.output, f"{args.model}_predictions.csv")
+        save_to_s3(final_predictions, output_path)
+        print(f"Predictions saved to {output_path}")
 
     except Exception as e:
         print(f"Error during prediction: {str(e)}")
