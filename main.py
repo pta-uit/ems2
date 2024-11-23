@@ -11,33 +11,33 @@ import pickle
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Deep Learning Models for Solar Generation Forecasting')
-    # Existing arguments
+    
+    # Common arguments
+    parser.add_argument('--model', type=str, required=True, choices=['lstnet', 'attention'],
+                       help='Model to use: lstnet or attention')
     parser.add_argument('--preprocessed_data', type=str, required=True, help='Path to the preprocessed data file')
     parser.add_argument('--gpu', type=int, default=-1, help='GPU to use (default: -1, i.e., CPU)')
     parser.add_argument('--save', type=str, default='model.pt', help='Path to save the model')
     parser.add_argument('--hidRNN', type=int, default=100, help='Number of RNN hidden units (default: 100)')
     parser.add_argument('--dropout', type=float, default=0.2, help='Dropout rate (default: 0.2)')
-    parser.add_argument('--output_fun', type=str, default='sigmoid', help='Output function: sigmoid, tanh or None (default: sigmoid)')
+    parser.add_argument('--output_fun', type=str, default='sigmoid', help='Output function: sigmoid, tanh or None')
     parser.add_argument('--epochs', type=int, default=100, help='Number of epochs (default: 100)')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size (default: 128)')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate (default: 0.001)')
     parser.add_argument('--loss_history', type=str, default=None, help='Path to save the loss history')
     parser.add_argument('--best_params', type=str, default=None, help='S3 path to the best hyperparameters JSON file')
     
-    # New arguments
-    parser.add_argument('--model', type=str, required=True, choices=['lstnet', 'attention'], 
-                        help='Model to use: lstnet or attention')
+    # Create argument groups for model-specific parameters
+    lstnet_group = parser.add_argument_group('LSTNet specific arguments')
+    lstnet_group.add_argument('--hidCNN', type=int, default=100, help='Number of CNN hidden units')
+    lstnet_group.add_argument('--hidSkip', type=int, default=5, help='Number of skip RNN hidden units')
+    lstnet_group.add_argument('--CNN_kernel', type=int, default=6, help='CNN kernel size')
+    lstnet_group.add_argument('--skip', type=int, default=24, help='Skip length')
+    lstnet_group.add_argument('--highway_window', type=int, default=24, help='Highway window size')
     
-    # LSTNet specific arguments
-    parser.add_argument('--hidCNN', type=int, default=100, help='Number of CNN hidden units (default: 100)')
-    parser.add_argument('--hidSkip', type=int, default=5, help='Number of skip RNN hidden units (default: 5)')
-    parser.add_argument('--CNN_kernel', type=int, default=6, help='CNN kernel size (default: 6)')
-    parser.add_argument('--skip', type=int, default=24, help='Skip length (default: 24)')
-    parser.add_argument('--highway_window', type=int, default=24, help='Highway window size (default: 24)')
+    attention_group = parser.add_argument_group('Attention LSTM specific arguments')
+    attention_group.add_argument('--num_layers', type=int, default=2, help='Number of LSTM layers')
     
-    # Attention LSTM specific arguments
-    parser.add_argument('--num_layers', type=int, default=2, help='Number of LSTM layers (default: 2)')
-
     args = parser.parse_args()
     args.cuda = args.gpu >= 0 and torch.cuda.is_available()
     return args
@@ -52,45 +52,69 @@ def get_s3(s3_path):
     return np.load(s3.open(s3_path), allow_pickle=True)
 
 def save_model(model, save_path, args, features):
-    # os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    
-    # # Save model state dict
-    # torch.save(model.state_dict(), save_path, _use_new_zipfile_serialization=True)
-    
-    # # Save metadata separately
-    # metadata = {
-    #     'args': vars(args),
-    #     'features': features
-    # }
-    # metadata_path = save_path.replace('.pt', '_metadata.pt')
-    # torch.save(metadata, metadata_path, _use_new_zipfile_serialization=True)
-
-    # print(f'Model saved to {save_path}')
-    # print(f'Metadata saved to {metadata_path}')
-
     """
-    Save model and metadata to S3 bucket.
+    Save model and filtered metadata to S3 bucket.
     """
     # Save model state dict
     model_state = model.state_dict()
     save_s3(save_path, model_state)
     
-    # Save metadata separately
+    filtered_params = filter_model_params(args, args.model)
     metadata = {
-        'args': vars(args),
+        'args': filtered_params,
         'features': features
     }
     metadata_path = save_path.replace('.pt', '_metadata.pt')
     save_s3(metadata_path, metadata)
 
     print(f'Model saved to S3: {save_path}')
-    print(f'Metadata saved to S3: {metadata_path}')
+    print(f'Filtered metadata saved to S3: {metadata_path}')
     
 def get_model(args, data):
     if args.model == 'lstnet':
         return LSTNet(args, data)
     else:  # attention
         return AttentionLSTM(args, data)
+    
+def filter_model_params(args, model_type):
+    """
+    Filter and return only the relevant parameters for the specified model type.
+    """
+    # Common parameters for both models
+    common_params = {
+        'model': args.model,
+        'preprocessed_data': args.preprocessed_data,
+        'gpu': args.gpu,
+        'hidRNN': args.hidRNN,
+        'dropout': args.dropout,
+        'output_fun': args.output_fun,
+        'epochs': args.epochs,
+        'batch_size': args.batch_size,
+        'lr': args.lr,
+        'window': args.window,
+        'horizon': args.horizon
+    }
+    
+    if model_type == 'lstnet':
+        # Add LSTNet specific parameters
+        model_params = {
+            **common_params,
+            'hidCNN': args.hidCNN,
+            'hidSkip': args.hidSkip,
+            'CNN_kernel': args.CNN_kernel,
+            'skip': args.skip,
+            'highway_window': args.highway_window
+        }
+    elif model_type == 'attention':
+        # Add Attention LSTM specific parameters
+        model_params = {
+            **common_params,
+            'num_layers': args.num_layers
+        }
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+        
+    return model_params
 
 def main():
     args = parse_args()
