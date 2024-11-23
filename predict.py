@@ -78,20 +78,22 @@ def load_model_from_s3(model_path, metadata_path, model_type):
         print(f"Error loading model: {str(e)}")
         return None, None
 
-def create_scaler(data):
+def create_scaler(data, model_features, input_features):
+    """Create and fit scaler only on model features."""
+    feature_indices = [input_features.index(feat) for feat in model_features if feat in input_features]
+    data_subset = data[:, :, feature_indices]
+    
     scaler = MinMaxScaler()
-    scaler.fit(data.reshape(-1, data.shape[-1]))
+    scaler.fit(data_subset.reshape(-1, len(model_features)))
     return scaler
 
 def preprocess_input(data, model_features, input_features, window_size, highway_window, scaler, h):
+    # Get indices of model features in input features
     feature_indices = [input_features.index(feat) for feat in model_features if feat in input_features]
     data_reordered = data[:, :, feature_indices]
     
+    # Scale the data using the pre-fit scaler
     data_reshaped = data_reordered.reshape(-1, data_reordered.shape[-1])
-    
-    if scaler.n_features_in_ != data_reshaped.shape[1]:
-        scaler.fit(data_reshaped)
-    
     data_scaled = scaler.transform(data_reshaped).reshape(data_reordered.shape)
     
     if data_scaled.shape[1] > window_size:
@@ -150,33 +152,45 @@ def process_predictions(predictions, timestamps, h, strategy='weighted_average',
     else:
         return melted[melted['horizon'] == 'h1'][['pred_timestamp', 'prediction']]
 
-def inverse_transform_predictions(predictions_df, scaler, features, target_feature):
+def inverse_transform_predictions(predictions_df, scaler, input_features, target_feature, model_features):
+    """
+    Transform predictions back to original scale.
+    Now handles the case where input_features and model_features might differ.
+    """
     try:
-        target_index = features.index(target_feature)
+        # Create a dummy array with zeros for all model features
+        dummy = np.zeros((len(predictions_df), len(model_features)))
         
-        # Create dummy array with correct shape
-        dummy = np.zeros((len(predictions_df), len(features)))
-        
-        # Verify target_index is within bounds
-        if target_index >= len(features):
-            raise ValueError(f"Target index {target_index} is out of bounds for features of size {len(features)}")
+        # Get the index of the target feature in the original model features
+        if target_feature not in input_features:
+            raise ValueError(f"Target feature {target_feature} not found in input features")
             
-        # Assign predictions to correct feature position
-        dummy[:, target_index] = predictions_df['prediction'].values
+        target_idx_input = input_features.index(target_feature)
+        
+        # Map this to the corresponding index in model_features if it exists
+        if target_feature in model_features:
+            target_idx_model = model_features.index(target_feature)
+        else:
+            # If target is not in model features, we'll need to add it
+            target_idx_model = len(model_features)
+            
+        # Place predictions in the dummy array
+        dummy[:, target_idx_model] = predictions_df['prediction'].values
         
         # Inverse transform
         unscaled = scaler.inverse_transform(dummy)
-        unscaled_predictions = unscaled[:, target_index]
+        unscaled_predictions = unscaled[:, target_idx_model]
         
         return pd.DataFrame({
             'timestamp': predictions_df['pred_timestamp'],
             'prediction': unscaled_predictions
         })
+        
     except Exception as e:
         print(f"Error in inverse_transform_predictions: {str(e)}")
-        print(f"Features: {features}")
+        print(f"Model features: {model_features}")
+        print(f"Input features: {input_features}")
         print(f"Target feature: {target_feature}")
-        print(f"Target index: {target_index}")
         print(f"Scaler shape: {scaler.n_features_in_}")
         raise
 
@@ -207,8 +221,10 @@ def main():
         horizon = metadata['args']['horizon']
         h = input_data['h']
         
+        # Create scaler using only model features
+        scaler = create_scaler(input_data['X'], model_features, input_data['features'])
+        
         # Prepare input data
-        scaler = create_scaler(input_data['X'])
         input_sequence, h = preprocess_input(input_data['X'], model_features, input_data['features'], 
                                            window_size, highway_window, scaler, h)
         
@@ -229,7 +245,8 @@ def main():
         # Transform predictions back to original scale
         target_feature = input_data['target']
         final_predictions = inverse_transform_predictions(processed_predictions, scaler, 
-                                                       input_data['features'], target_feature)
+                                                       input_data['features'], target_feature,
+                                                       model_features)
         
         # Save predictions
         output_path = os.path.join(args.output, f"{args.model}_predictions.csv")
