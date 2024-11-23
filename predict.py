@@ -85,11 +85,10 @@ def create_scaler(data, model_features, input_features):
     
     scaler = MinMaxScaler()
     scaler.fit(data_subset.reshape(-1, len(model_features)))
-    return scaler
+    return scaler, feature_indices
 
-def preprocess_input(data, model_features, input_features, window_size, highway_window, scaler, h):
-    # Get indices of model features in input features
-    feature_indices = [input_features.index(feat) for feat in model_features if feat in input_features]
+def preprocess_input(data, feature_indices, window_size, highway_window, scaler, h):
+    """Preprocess input data using pre-computed feature indices."""
     data_reordered = data[:, :, feature_indices]
     
     # Scale the data using the pre-fit scaler
@@ -155,35 +154,12 @@ def process_predictions(predictions, timestamps, h, strategy='weighted_average',
 def inverse_transform_predictions(predictions_df, scaler, input_features, target_feature, model_features):
     """
     Transform predictions back to original scale.
-    Now handles the case where input_features and model_features might differ.
+    Handles the case where target feature is not in model features.
     """
     try:
-        # Create a dummy array with zeros for all model features
-        dummy = np.zeros((len(predictions_df), len(model_features)))
-        
-        # Get the index of the target feature in the original model features
-        if target_feature not in input_features:
-            raise ValueError(f"Target feature {target_feature} not found in input features")
-            
-        target_idx_input = input_features.index(target_feature)
-        
-        # Map this to the corresponding index in model_features if it exists
-        if target_feature in model_features:
-            target_idx_model = model_features.index(target_feature)
-        else:
-            # If target is not in model features, we'll need to add it
-            target_idx_model = len(model_features)
-            
-        # Place predictions in the dummy array
-        dummy[:, target_idx_model] = predictions_df['prediction'].values
-        
-        # Inverse transform
-        unscaled = scaler.inverse_transform(dummy)
-        unscaled_predictions = unscaled[:, target_idx_model]
-        
         return pd.DataFrame({
             'timestamp': predictions_df['pred_timestamp'],
-            'prediction': unscaled_predictions
+            'prediction': predictions_df['prediction'].values
         })
         
     except Exception as e:
@@ -221,11 +197,11 @@ def main():
         horizon = metadata['args']['horizon']
         h = input_data['h']
         
-        # Create scaler using only model features
-        scaler = create_scaler(input_data['X'], model_features, input_data['features'])
+        # Create scaler using only model features and get feature indices
+        scaler, feature_indices = create_scaler(input_data['X'], model_features, input_data['features'])
         
         # Prepare input data
-        input_sequence, h = preprocess_input(input_data['X'], model_features, input_data['features'], 
+        input_sequence, h = preprocess_input(input_data['X'], feature_indices, 
                                            window_size, highway_window, scaler, h)
         
         # Make predictions
