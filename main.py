@@ -54,11 +54,13 @@ def get_s3(s3_path):
 def save_model(model, save_path, args, features):
     """
     Save model and filtered metadata to S3 bucket.
+    Ensures all necessary parameters are saved for model loading and prediction.
     """
     # Save model state dict
     model_state = model.state_dict()
     save_s3(save_path, model_state)
     
+    # Filter parameters based on model type and save metadata
     filtered_params = filter_model_params(args, args.model)
     metadata = {
         'args': filtered_params,
@@ -78,13 +80,15 @@ def get_model(args, data):
     
 def filter_model_params(args, model_type):
     """
-    Filter and return only the relevant parameters for the specified model type.
+    Filter and return only the relevant parameters for the specified model type,
+    ensuring all necessary parameters are included for model loading and prediction.
     """
-    # Common parameters for both models
+    # Common parameters required for all models
     common_params = {
         'model': args.model,
         'preprocessed_data': args.preprocessed_data,
         'gpu': args.gpu,
+        'cuda': args.cuda,  # Essential for model loading
         'hidRNN': args.hidRNN,
         'dropout': args.dropout,
         'output_fun': args.output_fun,
