@@ -142,24 +142,43 @@ def process_predictions(predictions, timestamps, h, strategy='weighted_average',
         return melted.sort_values('timestamp').groupby('pred_timestamp').last().reset_index()
     elif strategy == 'weighted_average':
         melted['weight'] = np.exp(-lambda_param * melted['hour_offset'])
-        weighted_avg = melted.groupby('pred_timestamp').apply(
-            lambda x: np.average(x['prediction'], weights=x['weight'])
-        ).reset_index(name='prediction')
+        # Fix the deprecation warning by explicitly selecting columns
+        weighted_avg = melted.groupby('pred_timestamp').agg(
+            prediction=pd.NamedAgg(column='prediction', aggfunc=lambda x: np.average(x, weights=melted.loc[x.index, 'weight']))
+        ).reset_index()
         return weighted_avg
     else:
         return melted[melted['horizon'] == 'h1'][['pred_timestamp', 'prediction']]
 
 def inverse_transform_predictions(predictions_df, scaler, features, target_feature):
-    target_index = features.index(target_feature)
-    dummy = np.zeros((len(predictions_df), scaler.n_features_in_))
-    dummy[:, target_index] = predictions_df['prediction'].values
-    unscaled = scaler.inverse_transform(dummy)
-    unscaled_predictions = unscaled[:, target_index]
-    
-    return pd.DataFrame({
-        'timestamp': predictions_df['pred_timestamp'],
-        'prediction': unscaled_predictions
-    })
+    try:
+        target_index = features.index(target_feature)
+        
+        # Create dummy array with correct shape
+        dummy = np.zeros((len(predictions_df), len(features)))
+        
+        # Verify target_index is within bounds
+        if target_index >= len(features):
+            raise ValueError(f"Target index {target_index} is out of bounds for features of size {len(features)}")
+            
+        # Assign predictions to correct feature position
+        dummy[:, target_index] = predictions_df['prediction'].values
+        
+        # Inverse transform
+        unscaled = scaler.inverse_transform(dummy)
+        unscaled_predictions = unscaled[:, target_index]
+        
+        return pd.DataFrame({
+            'timestamp': predictions_df['pred_timestamp'],
+            'prediction': unscaled_predictions
+        })
+    except Exception as e:
+        print(f"Error in inverse_transform_predictions: {str(e)}")
+        print(f"Features: {features}")
+        print(f"Target feature: {target_feature}")
+        print(f"Target index: {target_index}")
+        print(f"Scaler shape: {scaler.n_features_in_}")
+        raise
 
 def main():
     args = parse_args()
@@ -175,6 +194,11 @@ def main():
         
         # Load input data
         input_data = load_from_s3(args.input_data)
+        
+        # Print debug information
+        print(f"Model features: {metadata['features']}")
+        print(f"Input features: {input_data['features']}")
+        print(f"Target feature: {input_data['target']}")
         
         # Get model parameters
         model_features = metadata['features']
