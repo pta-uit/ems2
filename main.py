@@ -42,7 +42,7 @@ def parse_args():
     args.cuda = args.gpu >= 0 and torch.cuda.is_available()
     return args
 
-def load_s3(s3_path,arr):
+def save_s3(s3_path,arr):
     s3 = S3FileSystem()
     with s3.open(s3_path, 'wb') as f:
         f.write(pickle.dumps(arr))
@@ -52,10 +52,28 @@ def get_s3(s3_path):
     return np.load(s3.open(s3_path), allow_pickle=True)
 
 def save_model(model, save_path, args, features):
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    # os.makedirs(os.path.dirname(save_path), exist_ok=True)
     
+    # # Save model state dict
+    # torch.save(model.state_dict(), save_path, _use_new_zipfile_serialization=True)
+    
+    # # Save metadata separately
+    # metadata = {
+    #     'args': vars(args),
+    #     'features': features
+    # }
+    # metadata_path = save_path.replace('.pt', '_metadata.pt')
+    # torch.save(metadata, metadata_path, _use_new_zipfile_serialization=True)
+
+    # print(f'Model saved to {save_path}')
+    # print(f'Metadata saved to {metadata_path}')
+
+    """
+    Save model and metadata to S3 bucket.
+    """
     # Save model state dict
-    torch.save(model.state_dict(), save_path, _use_new_zipfile_serialization=True)
+    model_state = model.state_dict()
+    save_s3(save_path, model_state)
     
     # Save metadata separately
     metadata = {
@@ -63,10 +81,10 @@ def save_model(model, save_path, args, features):
         'features': features
     }
     metadata_path = save_path.replace('.pt', '_metadata.pt')
-    torch.save(metadata, metadata_path, _use_new_zipfile_serialization=True)
+    save_s3(metadata_path, metadata)
 
-    print(f'Model saved to {save_path}')
-    print(f'Metadata saved to {metadata_path}')
+    print(f'Model saved to S3: {save_path}')
+    print(f'Metadata saved to S3: {metadata_path}')
     
 def get_model(args, data):
     if args.model == 'lstnet':
