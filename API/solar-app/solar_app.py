@@ -4,35 +4,43 @@ import requests
 from datetime import datetime, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
+import os
 
 st.set_page_config(page_title="Solar Power Prediction", layout="wide")
 
-# Constants
-API_URL = "http://solar-prediction-api-service:5000/predict"
+API_URL = os.getenv('SOLAR_API_URL', 'http://localhost:5000')
 
 def format_datetime(dt):
-    """Format datetime to match API expectations"""
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
-def get_predictions(start_datetime, n_hours):
+def get_predictions(start_datetime, n_hours, model):
     params = {
         "datetime": format_datetime(start_datetime),
-        "n_hours": n_hours
+        "n_hours": n_hours,
+        "model": model
     }
     
     try:
-        response = requests.get(API_URL, params=params)
+        response = requests.get(f"{API_URL}/predict", 
+                              params=params, 
+                              timeout=10)
+        
         if response.status_code == 404:
             st.warning("No predictions available for the specified time range.")
             return None
         response.raise_for_status()
         return response.json()
+    except requests.exceptions.Timeout:
+        st.error("Connection timed out. Please check if the API service is running.")
+        return None
+    except requests.exceptions.ConnectionError:
+        st.error(f"Could not connect to the API at {API_URL}. Please check if the service is running and the URL is correct.")
+        return None
     except requests.exceptions.RequestException as e:
         st.error(f"Error fetching predictions: {str(e)}")
         return None
 
 def main():
-    # Set the font family
     st.markdown("""
     <style>
     body {
@@ -41,24 +49,30 @@ def main():
     </style>
     """, unsafe_allow_html=True)
 
-    # Set the color palette
     colors = ['#0077B6', '#F4A460', '#008B8B']
 
-    st.sidebar.header("Input Parameters")
+    st.sidebar.markdown("### Input Parameters")
+    
+    # Model selection
+    model = st.sidebar.selectbox(
+        "Select Model",
+        options=['lstnet', 'attention'],
+        format_func=lambda x: x.upper(),
+        help="Choose between LSTNET and Attention models for prediction"
+    )
     
     # Date and time selection
     start_date = st.sidebar.date_input("Select Date", datetime.now())
     start_time = st.sidebar.time_input("Select Time", datetime.now())
     
-    # Combine date and time
     start_datetime = datetime.combine(start_date, start_time)
     
     # Number of hours to predict
     n_hours = st.sidebar.slider("Hours to Predict", min_value=1, max_value=72, value=24)
     
     if st.sidebar.button("Get Predictions"):
-        with st.spinner("Fetching predictions..."):
-            predictions = get_predictions(start_datetime, n_hours)
+        with st.spinner(f"Fetching predictions from {model.upper()} model..."):
+            predictions = get_predictions(start_datetime, n_hours, model)
         
         if predictions:
             # Convert predictions to DataFrame
@@ -75,7 +89,6 @@ def main():
                 st.plotly_chart(fig1)
             
             with col2:
-                # Group data by time intervals
                 df['time_interval'] = pd.cut(df['timestamp'].dt.hour, bins=[-1, 8, 16, 24], labels=['Night', 'Day', 'Evening'])
                 
                 st.subheader("Predicted Power Distribution")
@@ -84,12 +97,10 @@ def main():
                                   font=dict(size=16))
                 st.plotly_chart(fig2)
             
-            # Prediction Data
-            st.subheader("Prediction Data")
+            st.subheader(f"{model.upper()} Model: Prediction Data")
             st.dataframe(df)
             
-            # Summary statistics
-            st.subheader("Summary Statistics")
+            st.subheader(f"{model.upper()} Model: Summary Statistics")
             summary_stats = {
                 "Average Prediction": f"{df['prediction'].mean():.4f} kW",
                 "Maximum Prediction": f"{df['prediction'].max():.4f} kW",
@@ -102,7 +113,7 @@ def main():
             st.download_button(
                 label="Download Predictions as CSV",
                 data=csv,
-                file_name=f"solar_predictions_{start_datetime.strftime('%Y%m%d_%H%M')}.csv",
+                file_name=f"solar_predictions_{model}_{start_datetime.strftime('%Y%m%d_%H%M')}.csv",
                 mime="text/csv"
             )
 
